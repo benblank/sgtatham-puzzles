@@ -4,7 +4,9 @@
 /bridges
 /cube
 /dominosa
+/dominosasolver
 /fifteen
+/fifteensolver
 /filling
 /fillingsolver
 /flip
@@ -25,6 +27,7 @@
 /magnetssolver
 /map
 /mapsolver
+/matching
 /mines
 /mineobfusc
 /net
@@ -32,8 +35,10 @@
 /nullgame
 /numgame
 /obfusc
+/palisade
 /path
 /pattern
+/patternpicture
 /patternsolver
 /pearl
 /pearlbench
@@ -94,12 +99,15 @@
 /org
 /*.ppc
 /*.i386
+/*.x86_64
 /Puzzles.ppc.bin
 /Puzzles.i386.bin
+/Puzzles.x86_64.bin
 /version2.def
 /preprocessed.but
 /*.a
 /aclocal.m4
+/autom4te.cache
 /config.log
 /config.status
 /configure

@@ -43,7 +43,8 @@ static char const tracks_diffchars[] = DIFFLIST(ENCODE);
 #define DIFFCONFIG DIFFLIST(CONFIG)
 
 struct game_params {
-    int w, h, diff, single_ones;
+    int w, h, diff;
+    bool single_ones;
 };
 
 static game_params *default_params(void)
@@ -52,7 +53,7 @@ static game_params *default_params(void)
 
     ret->w = ret->h = 8;
     ret->diff = DIFF_TRICKY;
-    ret->single_ones = TRUE;
+    ret->single_ones = true;
 
     return ret;
 }
@@ -70,13 +71,13 @@ static const struct game_params tracks_presets[] = {
     {15, 15, DIFF_TRICKY, 1},
 };
 
-static int game_fetch_preset(int i, char **name, game_params **params)
+static bool game_fetch_preset(int i, char **name, game_params **params)
 {
     game_params *ret;
     char str[80];
 
     if (i < 0 || i >= lenof(tracks_presets))
-        return FALSE;
+        return false;
 
     ret = snew(game_params);
     *ret = tracks_presets[i];
@@ -85,7 +86,7 @@ static int game_fetch_preset(int i, char **name, game_params **params)
 
     *name = dupstr(str);
     *params = ret;
-    return TRUE;
+    return true;
 }
 
 static void free_params(game_params *params)
@@ -118,15 +119,15 @@ static void decode_params(game_params *params, char const *string)
                 params->diff = i;
         if (*string) string++;
     }
-    params->single_ones = TRUE;
+    params->single_ones = true;
     if (*string == 'o') {
-        params->single_ones = FALSE;
+        params->single_ones = false;
         string++;
     }
 
 }
 
-static char *encode_params(const game_params *params, int full)
+static char *encode_params(const game_params *params, bool full)
 {
     char buf[120];
 
@@ -148,28 +149,24 @@ static config_item *game_configure(const game_params *params)
     ret[0].name = "Width";
     ret[0].type = C_STRING;
     sprintf(buf, "%d", params->w);
-    ret[0].sval = dupstr(buf);
-    ret[0].ival = 0;
+    ret[0].u.string.sval = dupstr(buf);
 
     ret[1].name = "Height";
     ret[1].type = C_STRING;
     sprintf(buf, "%d", params->h);
-    ret[1].sval = dupstr(buf);
-    ret[1].ival = 0;
+    ret[1].u.string.sval = dupstr(buf);
 
     ret[2].name = "Difficulty";
     ret[2].type = C_CHOICES;
-    ret[2].sval = DIFFCONFIG;
-    ret[2].ival = params->diff;
+    ret[2].u.choices.choicenames = DIFFCONFIG;
+    ret[2].u.choices.selected = params->diff;
 
     ret[3].name = "Disallow consecutive 1 clues";
     ret[3].type = C_BOOLEAN;
-    ret[3].ival = params->single_ones;
+    ret[3].u.boolean.bval = params->single_ones;
 
     ret[4].name = NULL;
     ret[4].type = C_END;
-    ret[4].sval = NULL;
-    ret[4].ival = 0;
 
     return ret;
 }
@@ -178,15 +175,15 @@ static game_params *custom_params(const config_item *cfg)
 {
     game_params *ret = snew(game_params);
 
-    ret->w = atoi(cfg[0].sval);
-    ret->h = atoi(cfg[1].sval);
-    ret->diff = cfg[2].ival;
-    ret->single_ones = cfg[3].ival;
+    ret->w = atoi(cfg[0].u.string.sval);
+    ret->h = atoi(cfg[1].u.string.sval);
+    ret->diff = cfg[2].u.choices.selected;
+    ret->single_ones = cfg[3].u.boolean.bval;
 
     return ret;
 }
 
-static char *validate_params(const game_params *params, int full)
+static const char *validate_params(const game_params *params, bool full)
 {
     /*
      * Generating anything under 4x4 runs into trouble of one kind
@@ -231,7 +228,7 @@ static char *validate_params(const game_params *params, int full)
 #define BLANK 0
 #define UNKNOWN 15
 
-int nbits[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
+static const int nbits[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
 
 /* square grid flags */
 #define S_TRACK 1     /* a track passes through this square (--> 2 edges) */
@@ -262,39 +259,43 @@ struct game_state {
     unsigned int *sflags;       /* size w*h */
     struct numbers *numbers;
     int *num_errors;            /* size w+h */
-    int completed, used_solve, impossible;
+    bool completed, used_solve, impossible;
 };
 
 /* Return the four directions in which a particular edge flag is set, around a square. */
-int S_E_DIRS(const game_state *state, int sx, int sy, unsigned int eflag) {
+static int S_E_DIRS(const game_state *state, int sx, int sy,
+                    unsigned int eflag) {
     return (state->sflags[sy*state->p.w+sx] >>
             ((eflag == E_TRACK) ? S_TRACK_SHIFT : S_NOTRACK_SHIFT)) & ALLDIR;
 }
 
 /* Count the number of a particular edge flag around a grid square. */
-int S_E_COUNT(const game_state *state, int sx, int sy, unsigned int eflag) {
+static int S_E_COUNT(const game_state *state, int sx, int sy,
+                     unsigned int eflag) {
     return nbits[S_E_DIRS(state, sx, sy, eflag)];
 }
 
 /* Return the two flags (E_TRACK and/or E_NOTRACK) set on a specific
  * edge of a square. */
-unsigned S_E_FLAGS(const game_state *state, int sx, int sy, int d) {
+static unsigned S_E_FLAGS(const game_state *state, int sx, int sy, int d) {
     unsigned f = state->sflags[sy*state->p.w+sx];
     int t = (f & (d << S_TRACK_SHIFT)), nt = (f & (d << S_NOTRACK_SHIFT));
     return (t ? E_TRACK : 0) | (nt ? E_NOTRACK : 0);
 }
 
-int S_E_ADJ(const game_state *state, int sx, int sy, int d, int *ax, int *ay, unsigned int *ad) {
-    if (d == L && sx > 0)            { *ax = sx-1; *ay = sy;   *ad = R; return 1; }
-    if (d == R && sx < state->p.w-1) { *ax = sx+1; *ay = sy;   *ad = L; return 1; }
-    if (d == U && sy > 0)            { *ax = sx;   *ay = sy-1; *ad = D; return 1; }
-    if (d == D && sy < state->p.h-1) { *ax = sx;   *ay = sy+1; *ad = U; return 1; }
+static bool S_E_ADJ(const game_state *state, int sx, int sy, int d, int *ax,
+                    int *ay, unsigned int *ad) {
+    if (d == L && sx > 0)            { *ax = sx-1; *ay = sy;   *ad = R; return true; }
+    if (d == R && sx < state->p.w-1) { *ax = sx+1; *ay = sy;   *ad = L; return true; }
+    if (d == U && sy > 0)            { *ax = sx;   *ay = sy-1; *ad = D; return true; }
+    if (d == D && sy < state->p.h-1) { *ax = sx;   *ay = sy+1; *ad = U; return true; }
 
-    return 0;
+    return false;
 }
 
 /* Sets flag (E_TRACK or E_NOTRACK) on a given edge of a square. */
-void S_E_SET(game_state *state, int sx, int sy, int d, unsigned int eflag) {
+static void S_E_SET(game_state *state, int sx, int sy, int d,
+                    unsigned int eflag) {
     unsigned shift = (eflag == E_TRACK) ? S_TRACK_SHIFT : S_NOTRACK_SHIFT, ad;
     int ax, ay;
 
@@ -306,7 +307,8 @@ void S_E_SET(game_state *state, int sx, int sy, int d, unsigned int eflag) {
 }
 
 /* Clears flag (E_TRACK or E_NOTRACK) on a given edge of a square. */
-void S_E_CLEAR(game_state *state, int sx, int sy, int d, unsigned int eflag) {
+static void S_E_CLEAR(game_state *state, int sx, int sy, int d,
+                      unsigned int eflag) {
     unsigned shift = (eflag == E_TRACK) ? S_TRACK_SHIFT : S_NOTRACK_SHIFT, ad;
     int ax, ay;
 
@@ -328,7 +330,7 @@ static void clear_game(game_state *state)
 
     memset(state->num_errors, 0, (w+h) * sizeof(int));
 
-    state->completed = state->used_solve = state->impossible = FALSE;
+    state->completed = state->used_solve = state->impossible = false;
 }
 
 static game_state *blank_game(const game_params *params)
@@ -392,7 +394,7 @@ static void free_game(game_state *state)
 }
 
 #define NDIRS 4
-const unsigned int dirs_const[] = { U, D, L, R };
+static const unsigned int dirs_const[] = { U, D, L, R };
 
 static unsigned int find_direction(game_state *state, random_state *rs,
                                    int x, int y)
@@ -420,7 +422,7 @@ static unsigned int find_direction(game_state *state, random_state *rs,
     return 0; /* no possible directions left. */
 }
 
-static int check_completion(game_state *state, int mark);
+static bool check_completion(game_state *state, bool mark);
 
 static void lay_path(game_state *state, random_state *rs)
 {
@@ -548,7 +550,7 @@ static int solve_progress(const game_state *state) {
     return progress;
 }
 
-static int check_phantom_moves(const game_state *state) {
+static bool check_phantom_moves(const game_state *state) {
     int x, y, i;
 
     /* Check that this state won't show 'phantom moves' at the start of the
@@ -561,10 +563,10 @@ static int check_phantom_moves(const game_state *state) {
             if (state->sflags[i] & S_CLUE)
                 continue;
             if (S_E_COUNT(state, x, y, E_TRACK) > 1)
-                return 1; /* found one! */
+                return true; /* found one! */
         }
     }
-    return 0;
+    return false;
 }
 
 static int add_clues(game_state *state, random_state *rs, int diff)
@@ -689,7 +691,7 @@ done:
 }
 
 static char *new_game_desc(const game_params *params, random_state *rs,
-                           char **aux, int interactive)
+                           char **aux, bool interactive)
 {
     int i, j, w = params->w, h = params->h, x, y, ret;
     game_state *state;
@@ -738,7 +740,7 @@ newpath:
     }
 
     if (params->single_ones) {
-        int last_was_one = 1, is_one; /* (disallow 1 clue at entry point) */
+        bool last_was_one = true, is_one; /* disallow 1 clue at entry point */
         for (i = 0; i < w+h; i++) {
             is_one = (state->numbers->numbers[i] == 1);
             if (is_one && last_was_one)
@@ -786,7 +788,7 @@ newpath:
     return desc;
 }
 
-static char *validate_desc(const game_params *params, const char *desc)
+static const char *validate_desc(const game_params *params, const char *desc)
 {
     int i = 0, w = params->w, h = params->h, in = 0, out = 0;
 
@@ -891,7 +893,7 @@ static int solve_set_sflag(game_state *state, int x, int y,
            x, y, (f == S_TRACK ? "TRACK" : "NOTRACK"), why));
     if (state->sflags[i] & (f == S_TRACK ? S_NOTRACK : S_TRACK)) {
         debug(("solve: opposite flag already set there, marking IMPOSSIBLE"));
-        state->impossible = TRUE;
+        state->impossible = true;
     }
     state->sflags[i] |= f;
     return 1;
@@ -909,7 +911,7 @@ static int solve_set_eflag(game_state *state, int x, int y, int d,
            (f == S_TRACK ? "TRACK" : "NOTRACK"), why));
     if (sf & (f == E_TRACK ? E_NOTRACK : E_TRACK)) {
         debug(("solve: opposite flag already set there, marking IMPOSSIBLE"));
-        state->impossible = TRUE;
+        state->impossible = true;
     }
     S_E_SET(state, x, y, d, f);
     return 1;
@@ -1072,7 +1074,7 @@ static int solve_check_single_sub(game_state *state, int si, int id, int n,
         x = i%w;
         y = i/w;
         if (abs(ox-x) > 1 || abs(oy-y) > 1) {
-            if (!state->sflags[i] & S_TRACK)
+            if (!(state->sflags[i] & S_TRACK))
                 did += solve_set_sflag(state, x, y, S_NOTRACK, what);
         }
     }
@@ -1120,7 +1122,7 @@ static int solve_check_loose_sub(game_state *state, int si, int id, int n,
     if (nloose > (target - e2count)) {
         debug(("check %s from (%d,%d): more loose (%d) than empty (%d), IMPOSSIBLE",
                what, si%w, si/w, nloose, target-e2count));
-        state->impossible = TRUE;
+        state->impossible = true;
     }
     if (nloose > 0 && nloose == (target - e2count)) {
         debug(("check %s from (%d,%d): nloose = empty (%d), forcing loners out.",
@@ -1177,7 +1179,8 @@ static int solve_check_loose_ends(game_state *state)
 static int solve_check_loop_sub(game_state *state, int x, int y, int dir,
                                 int *dsf, int startc, int endc)
 {
-    int w = state->p.w, h = state->p.h, i = y*w+x, j, k, satisfied = 1;
+    int w = state->p.w, h = state->p.h, i = y*w+x, j, k;
+    bool satisfied = true;
 
     j = (y+DY(dir))*w + (x+DX(dir));
 
@@ -1207,12 +1210,12 @@ static int solve_check_loop_sub(game_state *state, int x, int y, int dir,
             for (k = 0; k < w; k++) {
                 int target = state->numbers->numbers[k];
                 int ntracks = solve_count_col(state, k, S_TRACK);
-                if (ntracks < target) satisfied = 0;
+                if (ntracks < target) satisfied = false;
             }
             for (k = 0; k < h; k++) {
                 int target = state->numbers->numbers[w+k];
                 int ntracks = solve_count_row(state, k, S_TRACK);
-                if (ntracks < target) satisfied = 0;
+                if (ntracks < target) satisfied = false;
             }
             if (!satisfied) {
                 return solve_set_eflag(state, x, y, dir, E_NOTRACK,
@@ -1286,10 +1289,11 @@ static void solve_discount_edge(game_state *state, int x, int y, int d)
 
 static int tracks_solve(game_state *state, int diff)
 {
-    int didsth, x, y, w = state->p.w, h = state->p.h;
+    int x, y, w = state->p.w, h = state->p.h;
+    bool didsth;
 
     debug(("solve..."));
-    state->impossible = FALSE;
+    state->impossible = false;
 
     /* Set all the outer border edges as no-track. */
     for (x = 0; x < w; x++) {
@@ -1302,24 +1306,24 @@ static int tracks_solve(game_state *state, int diff)
     }
 
     while (1) {
-        didsth = 0;
+        didsth = false;
 
-        didsth += solve_update_flags(state);
-        didsth += solve_count_clues(state);
-        didsth += solve_check_loop(state);
+        didsth |= solve_update_flags(state);
+        didsth |= solve_count_clues(state);
+        didsth |= solve_check_loop(state);
 
         if (diff >= DIFF_TRICKY) {
-            didsth += solve_check_single(state);
-            didsth += solve_check_loose_ends(state);
+            didsth |= solve_check_single(state);
+            didsth |= solve_check_loose_ends(state);
         }
 
         if (!didsth || state->impossible) break;
     }
 
-    return state->impossible ? -1 : check_completion(state, FALSE) ? 1 : 0;
+    return state->impossible ? -1 : check_completion(state, false) ? 1 : 0;
 }
 
-static char *move_string_diff(const game_state *before, const game_state *after, int issolve)
+static char *move_string_diff(const game_state *before, const game_state *after, bool issolve)
 {
     int w = after->p.w, h = after->p.h, i, j;
     char *move = snewn(w*h*40, char), *p = move;
@@ -1368,7 +1372,7 @@ static char *move_string_diff(const game_state *before, const game_state *after,
 }
 
 static char *solve_game(const game_state *state, const game_state *currstate,
-                        const char *aux, char **error)
+                        const char *aux, const char **error)
 {
     game_state *solved;
     int ret;
@@ -1386,16 +1390,16 @@ static char *solve_game(const game_state *state, const game_state *currstate,
         *error = "Unable to find solution";
         move = NULL;
     } else {
-        move = move_string_diff(currstate, solved, TRUE);
+        move = move_string_diff(currstate, solved, true);
     }
 
     free_game(solved);
     return move;
 }
 
-static int game_can_format_as_text_now(const game_params *params)
+static bool game_can_format_as_text_now(const game_params *params)
 {
-    return TRUE;
+    return true;
 }
 
 static char *game_text_format(const game_state *state)
@@ -1490,11 +1494,10 @@ static void debug_state(game_state *state, const char *what) {
     sfree(sstring);
 }
 
-static void dsf_update_completion(game_state *state, int *loopclass,
-                                  int ax, int ay, char dir,
-                                  int *dsf)
+static void dsf_update_completion(game_state *state, int ax, int ay,
+                                  char dir, int *dsf)
 {
-    int w = state->p.w, ai = ay*w+ax, bx, by, bi, ac, bc;
+    int w = state->p.w, ai = ay*w+ax, bx, by, bi;
 
     if (!(S_E_DIRS(state, ax, ay, E_TRACK) & dir)) return;
     bx = ax + DX(dir);
@@ -1503,22 +1506,48 @@ static void dsf_update_completion(game_state *state, int *loopclass,
     if (!INGRID(state, bx, by)) return;
     bi = by*w+bx;
 
-    ac = dsf_canonify(dsf, ai);
-    bc = dsf_canonify(dsf, bi);
-
-    if (ac == bc) {
-        /* loop detected */
-        *loopclass = ac;
-    } else {
-        dsf_merge(dsf, ai, bi);
-    }
+    dsf_merge(dsf, ai, bi);
 }
 
-static int check_completion(game_state *state, int mark)
+struct tracks_neighbour_ctx {
+    game_state *state;
+    int i, n, neighbours[4];
+};
+static int tracks_neighbour(int vertex, void *vctx)
 {
-    int w = state->p.w, h = state->p.h, x, y, i, target, ret = TRUE;
-    int ntrack, nnotrack;
-    int *dsf, loopclass, pathclass;
+    struct tracks_neighbour_ctx *ctx = (struct tracks_neighbour_ctx *)vctx;
+    if (vertex >= 0) {
+        game_state *state = ctx->state;
+        int w = state->p.w, x = vertex % w, y = vertex / w;
+        int dirs = S_E_DIRS(state, x, y, E_TRACK);
+        int j;
+
+        ctx->i = ctx->n = 0;
+
+        for (j = 0; j < 4; j++) {
+            int dir = 1<<j;
+            if (dirs & dir) {
+                int nx = x + DX(dir), ny = y + DY(dir);
+                if (INGRID(state, nx, ny))
+                    ctx->neighbours[ctx->n++] = ny * w + nx;
+            }
+        }
+    }
+
+    if (ctx->i < ctx->n)
+        return ctx->neighbours[ctx->i++];
+    else
+        return -1;
+}
+
+static bool check_completion(game_state *state, bool mark)
+{
+    int w = state->p.w, h = state->p.h, x, y, i, target;
+    bool ret = true;
+    int ntrack, nnotrack, ntrackcomplete;
+    int *dsf, pathclass;
+    struct findloopstate *fls;
+    struct tracks_neighbour_ctx ctx;
 
     if (mark) {
         for (i = 0; i < w+h; i++) {
@@ -1527,19 +1556,28 @@ static int check_completion(game_state *state, int mark)
         for (i = 0; i < w*h; i++) {
             state->sflags[i] &= ~S_ERROR;
             if (S_E_COUNT(state, i%w, i/w, E_TRACK) > 0) {
-                if (S_E_COUNT(state, i%w, i/w, E_TRACK) > 2)
+                if (S_E_COUNT(state, i%w, i/w, E_TRACK) > 2) {
+                    ret = false;
                     state->sflags[i] |= S_ERROR;
+                }
             }
         }
     }
 
-    /* A cell is 'complete' if it has any edges marked as TRACK. */
+    /* A cell is 'complete', for the purposes of marking the game as
+     * finished, if it has two edges marked as TRACK. But it only has
+     * to have one edge marked as TRACK, or be filled in as trackful
+     * without any specific edges known, to count towards checking
+     * row/column clue errors. */
     for (x = 0; x < w; x++) {
         target = state->numbers->numbers[x];
-        ntrack = nnotrack = 0;
+        ntrack = nnotrack = ntrackcomplete = 0;
         for (y = 0; y < h; y++) {
-            if (S_E_COUNT(state, x, y, E_TRACK) > 0)
+            if (S_E_COUNT(state, x, y, E_TRACK) > 0 ||
+                state->sflags[y*w+x] & S_TRACK)
                 ntrack++;
+            if (S_E_COUNT(state, x, y, E_TRACK) == 2)
+                ntrackcomplete++;
             if (state->sflags[y*w+x] & S_NOTRACK)
                 nnotrack++;
         }
@@ -1548,17 +1586,21 @@ static int check_completion(game_state *state, int mark)
                 debug(("col %d error: target %d, track %d, notrack %d",
                        x, target, ntrack, nnotrack));
                 state->num_errors[x] = 1;
+                ret = false;
             }
         }
-        if (ntrack != target)
-            ret = FALSE;
+        if (ntrackcomplete != target)
+            ret = false;
     }
     for (y = 0; y < h; y++) {
         target = state->numbers->numbers[w+y];
-        ntrack = nnotrack = 0;
+        ntrack = nnotrack = ntrackcomplete = 0;
         for (x = 0; x < w; x++) {
-            if (S_E_COUNT(state, x, y, E_TRACK) == 2)
+            if (S_E_COUNT(state, x, y, E_TRACK) > 0 ||
+                state->sflags[y*w+x] & S_TRACK)
                 ntrack++;
+            if (S_E_COUNT(state, x, y, E_TRACK) == 2)
+                ntrackcomplete++;
             if (state->sflags[y*w+x] & S_NOTRACK)
                 nnotrack++;
         }
@@ -1567,36 +1609,44 @@ static int check_completion(game_state *state, int mark)
                 debug(("row %d error: target %d, track %d, notrack %d",
                        y, target, ntrack, nnotrack));
                 state->num_errors[w+y] = 1;
+                ret = false;
             }
         }
-        if (ntrack != target)
-            ret = FALSE;
+        if (ntrackcomplete != target)
+            ret = false;
     }
 
     dsf = snewn(w*h, int);
     dsf_init(dsf, w*h);
-    loopclass = -1;
 
     for (x = 0; x < w; x++) {
         for (y = 0; y < h; y++) {
-            dsf_update_completion(state, &loopclass, x, y, R, dsf);
-            dsf_update_completion(state, &loopclass, x, y, D, dsf);
+            dsf_update_completion(state, x, y, R, dsf);
+            dsf_update_completion(state, x, y, D, dsf);
         }
     }
-    if (loopclass != -1) {
+
+    fls = findloop_new_state(w*h);
+    ctx.state = state;
+    if (findloop_run(fls, w*h, tracks_neighbour, &ctx)) {
         debug(("loop detected, not complete"));
-        ret = FALSE; /* no loop allowed */
+        ret = false; /* no loop allowed */
         if (mark) {
             for (x = 0; x < w; x++) {
                 for (y = 0; y < h; y++) {
-                    /* TODO this will only highlight the first loop found */
-                    if (dsf_canonify(dsf, y*w + x) == loopclass) {
-                        state->sflags[y*w+x] |= S_ERROR;
-                    }
+                    int u, v;
+
+                    u = y*w + x;
+                    for (v = tracks_neighbour(u, &ctx); v >= 0;
+                         v = tracks_neighbour(-1, &ctx))
+                        if (findloop_is_loop_edge(fls, u, v))
+                            state->sflags[y*w+x] |= S_ERROR;
                 }
             }
         }
     }
+    findloop_free_state(fls);
+
     if (mark) {
         pathclass = dsf_canonify(dsf, state->numbers->row_s*w);
         if (pathclass == dsf_canonify(dsf, (h-1)*w + state->numbers->col_s)) {
@@ -1605,9 +1655,17 @@ static int check_completion(game_state *state, int mark)
             for (i = 0; i < w*h; i++) {
                 if ((dsf_canonify(dsf, i) != pathclass) &&
                     ((state->sflags[i] & S_TRACK) ||
-                     (S_E_COUNT(state, i%w, i/w, E_TRACK) > 0)))
+                     (S_E_COUNT(state, i%w, i/w, E_TRACK) > 0))) {
+                    ret = false;
                     state->sflags[i] |= S_ERROR;
+                }
             }
+        } else {
+            /* If we _don't_ have such a path, then certainly the game
+             * can't be in a winning state. So even if we're not
+             * highlighting any _errors_, we certainly shouldn't
+             * return true. */
+            ret = false;
         }
     }
 
@@ -1620,21 +1678,23 @@ static int check_completion(game_state *state, int mark)
 /* Code borrowed from Pearl. */
 
 struct game_ui {
-    int dragging, clearing, notrack;
+    bool dragging, clearing, notrack;
     int drag_sx, drag_sy, drag_ex, drag_ey; /* drag start and end grid coords */
     int clickx, clicky;    /* pixel position of initial click */
 
     int curx, cury;        /* grid position of keyboard cursor; uses half-size grid */
-    int cursor_active;     /* TRUE iff cursor is shown */
+    bool cursor_active;     /* true iff cursor is shown */
 };
 
 static game_ui *new_ui(const game_state *state)
 {
     game_ui *ui = snew(game_ui);
 
-    ui->clearing = ui->notrack = ui->dragging = 0;
+    ui->clearing = false;
+    ui->notrack = false;
+    ui->dragging = false;
     ui->drag_sx = ui->drag_sy = ui->drag_ex = ui->drag_ey = -1;
-    ui->cursor_active = FALSE;
+    ui->cursor_active = false;
     ui->curx = ui->cury = 1;
 
     return ui;
@@ -1665,7 +1725,10 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
 #define TILE_SIZE (ds->sz6*6)
 
 #define BORDER (TILE_SIZE/8)
-#define BORDER_WIDTH (max(TILE_SIZE / 32, 1))
+#define LINE_THICK (TILE_SIZE/16)
+#define GRID_LINE_TL (ds->grid_line_tl)
+#define GRID_LINE_BR (ds->grid_line_br)
+#define GRID_LINE_ALL (ds->grid_line_all)
 
 #define COORD(x) ( (x+1) * TILE_SIZE + BORDER )
 #define CENTERED_COORD(x) ( COORD(x) + TILE_SIZE/2 )
@@ -1685,8 +1748,8 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
 #define DS_CSHIFT 20    /* R/U/L/D shift, for cursor-on-edge */
 
 struct game_drawstate {
-    int sz6;
-    int started;
+    int sz6, grid_line_all, grid_line_tl, grid_line_br;
+    bool started;
 
     int w, h, sz;
     unsigned int *flags, *flags_drag;
@@ -1701,20 +1764,20 @@ static void update_ui_drag(const game_state *state, game_ui *ui, int gx, int gy)
     if (dy == 0) {
         ui->drag_ex = gx < 0 ? 0 : gx >= w ? w-1 : gx;
         ui->drag_ey = ui->drag_sy;
-        ui->dragging = TRUE;
+        ui->dragging = true;
     } else if (dx == 0) {
         ui->drag_ex = ui->drag_sx;
         ui->drag_ey = gy < 0 ? 0 : gy >= h ? h-1 : gy;
-        ui->dragging = TRUE;
+        ui->dragging = true;
     } else {
         ui->drag_ex = ui->drag_sx;
         ui->drag_ey = ui->drag_sy;
-        ui->dragging = FALSE;
+        ui->dragging = false;
     }
 }
 
-static int ui_can_flip_edge(const game_state *state, int x, int y, int dir,
-                            int notrack)
+static bool ui_can_flip_edge(const game_state *state, int x, int y, int dir,
+                             bool notrack)
 {
     int w = state->p.w /*, h = state->shared->h, sz = state->shared->sz */;
     int x2 = x + DX(dir);
@@ -1722,12 +1785,12 @@ static int ui_can_flip_edge(const game_state *state, int x, int y, int dir,
     unsigned int sf1, sf2, ef;
 
     if (!INGRID(state, x, y) || !INGRID(state, x2, y2))
-        return FALSE;
+        return false;
 
     sf1 = state->sflags[y*w + x];
     sf2 = state->sflags[y2*w + x2];
     if ( !notrack && ((sf1 & S_CLUE) || (sf2 & S_CLUE)) )
-        return FALSE;
+        return false;
 
     ef = S_E_FLAGS(state, x, y, dir);
     if (notrack) {
@@ -1736,48 +1799,48 @@ static int ui_can_flip_edge(const game_state *state, int x, int y, int dir,
          could be set to TRACK, because we don't know which edges the general
          square setting refers to. */
       if (!(ef & E_NOTRACK) && (ef & E_TRACK))
-          return FALSE;
+          return false;
     } else {
       if (!(ef & E_TRACK)) {
           /* if we're going to _set_ TRACK, make sure neither adjacent square nor
              the edge itself is already set to NOTRACK. */
           if ((sf1 & S_NOTRACK) || (sf2 & S_NOTRACK) || (ef & E_NOTRACK))
-              return FALSE;
+              return false;
           /* if we're going to _set_ TRACK, make sure neither adjacent square has
              2 track flags already.  */
           if ((S_E_COUNT(state, x, y, E_TRACK) >= 2) ||
               (S_E_COUNT(state, x2, y2, E_TRACK) >= 2))
-              return FALSE;
+              return false;
           }
     }
-    return TRUE;
+    return true;
 }
 
-static int ui_can_flip_square(const game_state *state, int x, int y, int notrack)
+static bool ui_can_flip_square(const game_state *state, int x, int y, bool notrack)
 {
     int w = state->p.w, trackc;
     unsigned sf;
 
-    if (!INGRID(state, x, y)) return FALSE;
+    if (!INGRID(state, x, y)) return false;
     sf = state->sflags[y*w+x];
     trackc = S_E_COUNT(state, x, y, E_TRACK);
 
-    if (sf & S_CLUE) return FALSE;
+    if (sf & S_CLUE) return false;
 
     if (notrack) {
         /* If we're setting S_NOTRACK, we cannot have either S_TRACK or any E_TRACK. */
         if (!(sf & S_NOTRACK) && ((sf & S_TRACK) || (trackc > 0)))
-            return FALSE;
+            return false;
     } else {
         /* If we're setting S_TRACK, we cannot have any S_NOTRACK (we could have
           E_NOTRACK, though, because one or two wouldn't rule out a track) */
         if (!(sf & S_TRACK) && (sf & S_NOTRACK))
-            return FALSE;
+            return false;
     }
-    return TRUE;
+    return true;
 }
 
-static char *edge_flip_str(const game_state *state, int x, int y, int dir, int notrack, char *buf) {
+static char *edge_flip_str(const game_state *state, int x, int y, int dir, bool notrack, char *buf) {
     unsigned ef = S_E_FLAGS(state, x, y, dir);
     char c;
 
@@ -1790,7 +1853,7 @@ static char *edge_flip_str(const game_state *state, int x, int y, int dir, int n
     return dupstr(buf);
 }
 
-static char *square_flip_str(const game_state *state, int x, int y, int notrack, char *buf) {
+static char *square_flip_str(const game_state *state, int x, int y, bool notrack, char *buf) {
     unsigned f = state->sflags[y*state->p.w+x];
     char c;
 
@@ -1845,8 +1908,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     /* --- mouse operations --- */
 
     if (IS_MOUSE_DOWN(button)) {
-        ui->cursor_active = FALSE;
-        ui->dragging = FALSE;
+        ui->cursor_active = false;
+        ui->dragging = false;
 
         if (!INGRID(state, gx, gy)) {
             /* can't drag from off grid */
@@ -1854,10 +1917,10 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         }
 
         if (button == RIGHT_BUTTON) {
-            ui->notrack = TRUE;
+            ui->notrack = true;
             ui->clearing = state->sflags[gy*w+gx] & S_NOTRACK;
         } else {
-            ui->notrack = FALSE;
+            ui->notrack = false;
             ui->clearing = state->sflags[gy*w+gx] & S_TRACK;
         }
 
@@ -1866,23 +1929,23 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         ui->drag_sx = ui->drag_ex = gx;
         ui->drag_sy = ui->drag_ey = gy;
 
-        return "";
+        return UI_UPDATE;
     }
 
     if (IS_MOUSE_DRAG(button)) {
-        ui->cursor_active = FALSE;
+        ui->cursor_active = false;
         update_ui_drag(state, ui, gx, gy);
-        return "";
+        return UI_UPDATE;
     }
 
     if (IS_MOUSE_RELEASE(button)) {
-        ui->cursor_active = FALSE;
+        ui->cursor_active = false;
         if (ui->dragging &&
             (ui->drag_sx != ui->drag_ex || ui->drag_sy != ui->drag_ey)) {
             game_state *dragged = copy_and_apply_drag(state, ui);
-            char *ret = move_string_diff(state, dragged, FALSE);
+            char *ret = move_string_diff(state, dragged, false);
 
-            ui->dragging = 0;
+            ui->dragging = false;
             free_game(dragged);
 
             return ret;
@@ -1892,7 +1955,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             /* We might still have been dragging (and just done a one-
              * square drag): cancel drag, so undo doesn't make it like
              * a drag-in-progress. */
-            ui->dragging = 0;
+            ui->dragging = false;
 
             /* Click (or tiny drag). Work out which edge we were
              * closest to. */
@@ -1909,12 +1972,12 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             cy = CENTERED_COORD(gy);
 
             if (!INGRID(state, gx, gy) || FROMCOORD(x) != gx || FROMCOORD(y) != gy)
-                return "";
+                return UI_UPDATE;
 
             if (max(abs(x-cx),abs(y-cy)) < TILE_SIZE/4) {
                 if (ui_can_flip_square(state, gx, gy, button == RIGHT_RELEASE))
                     return square_flip_str(state, gx, gy, button == RIGHT_RELEASE, tmpbuf);
-                return "";
+                return UI_UPDATE;
             } else {
                 if (abs(x-cx) < abs(y-cy)) {
                     /* Closest to top/bottom edge. */
@@ -1928,7 +1991,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                     return edge_flip_str(state, gx, gy, direction,
                             button == RIGHT_RELEASE, tmpbuf);
                 else
-                    return "";
+                    return UI_UPDATE;
             }
         }
     }
@@ -1940,8 +2003,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         int dy = (button == CURSOR_DOWN) ? +1 : ((button == CURSOR_UP)    ? -1 : 0);
 
         if (!ui->cursor_active) {
-            ui->cursor_active = TRUE;
-            return "";
+            ui->cursor_active = true;
+            return UI_UPDATE;
         }
 
         ui->curx = ui->curx + dx;
@@ -1952,17 +2015,17 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         }
         ui->curx = min(max(ui->curx, 1), 2*w-1);
         ui->cury = min(max(ui->cury, 1), 2*h-1);
-        return "";
+        return UI_UPDATE;
     }
 
     if (IS_CURSOR_SELECT(button)) {
         if (!ui->cursor_active) {
-            ui->cursor_active = TRUE;
-            return "";
+            ui->cursor_active = true;
+            return UI_UPDATE;
         }
         /* click on square corner does nothing (shouldn't get here) */
         if ((ui->curx % 2) == 0 && (ui->cury % 2 == 0))
-            return "";
+            return UI_UPDATE;
 
         gx = ui->curx / 2;
         gy = ui->cury / 2;
@@ -1974,7 +2037,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         else if (!direction &&
                  ui_can_flip_square(state, gx, gy, button == CURSOR_SELECT2))
             return square_flip_str(state, gx, gy, button == CURSOR_SELECT2, tmpbuf);
-        return "";
+        return UI_UPDATE;
     }
 
 #if 0
@@ -2000,7 +2063,7 @@ static game_state *execute_move(const game_state *state, const char *move)
     while (*move) {
         c = *move;
         if (c == 'S') {
-            ret->used_solve = TRUE;
+            ret->used_solve = true;
             move++;
         } else if (c == 'T' || c == 't' || c == 'N' || c == 'n') {
             /* set track, clear track; set notrack, clear notrack */
@@ -2042,7 +2105,7 @@ static game_state *execute_move(const game_state *state, const char *move)
             goto badmove;
     }
 
-    check_completion(ret, TRUE);
+    check_completion(ret, true);
 
     return ret;
 
@@ -2065,7 +2128,6 @@ static void game_compute_size(const game_params *params, int tilesize,
         int sz6;
     } ads, *ds = &ads;
     ads.sz6 = tilesize/6;
-
     *x = (params->w+2) * TILE_SIZE + 2 * BORDER;
     *y = (params->h+2) * TILE_SIZE + 2 * BORDER;
 }
@@ -2074,6 +2136,9 @@ static void game_set_size(drawing *dr, game_drawstate *ds,
                           const game_params *params, int tilesize)
 {
     ds->sz6 = tilesize/6;
+    ds->grid_line_all = max(LINE_THICK, 1);
+    ds->grid_line_br = ds->grid_line_all / 2;
+    ds->grid_line_tl = ds->grid_line_all - ds->grid_line_br;
 }
 
 enum {
@@ -2082,7 +2147,7 @@ enum {
     COL_GRID, COL_CLUE, COL_CURSOR,
     COL_TRACK, COL_TRACK_CLUE, COL_SLEEPER,
     COL_DRAGON, COL_DRAGOFF,
-    COL_ERROR, COL_FLASH,
+    COL_ERROR, COL_FLASH, COL_ERROR_BACKGROUND,
     NCOLOURS
 };
 
@@ -2094,11 +2159,12 @@ static float *game_colours(frontend *fe, int *ncolours)
     game_mkhighlight(fe, ret, COL_BACKGROUND, COL_HIGHLIGHT, COL_LOWLIGHT);
 
     for (i = 0; i < 3; i++) {
-        ret[COL_TRACK_CLUE * 3 + i] = 0.0F;
-        ret[COL_TRACK * 3 + i] = 0.5F;
-        ret[COL_CLUE * 3 + i] = 0.0F;
-        ret[COL_GRID * 3 + i] = 0.75F;
-        ret[COL_CURSOR * 3 + i] = 0.6F;
+        ret[COL_TRACK_CLUE       * 3 + i] = 0.0F;
+        ret[COL_TRACK            * 3 + i] = 0.5F;
+        ret[COL_CLUE             * 3 + i] = 0.0F;
+        ret[COL_GRID             * 3 + i] = 0.75F;
+        ret[COL_CURSOR           * 3 + i] = 0.6F;
+        ret[COL_ERROR_BACKGROUND * 3 + i] = 1.0F;
     }
 
     ret[COL_SLEEPER * 3 + 0] = 0.5F;
@@ -2131,7 +2197,7 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     int i;
 
     ds->sz6 = 0;
-    ds->started = FALSE;
+    ds->started = false;
 
     ds->w = state->p.w;
     ds->h = state->p.h;
@@ -2293,14 +2359,13 @@ static void draw_square(drawing *dr, game_drawstate *ds,
     /* Clip to the grid square. */
     clip(dr, ox, oy, TILE_SIZE, TILE_SIZE);
 
-    /* Clear the square. */
+    /* Clear the square so that it's got an appropriately-sized border
+     * in COL_GRID and a central area in the right background colour. */
     best_bits((flags & DS_TRACK) == DS_TRACK,
               (flags_drag & DS_TRACK) == DS_TRACK, &bg);
-    draw_rect(dr, ox, oy, TILE_SIZE, TILE_SIZE, bg);
-
-    /* Draw outline of grid square */
-    draw_line(dr, ox, oy, COORD(x+1), oy, COL_GRID);
-    draw_line(dr, ox, oy, ox, COORD(y+1), COL_GRID);
+    draw_rect(dr, ox, oy, TILE_SIZE, TILE_SIZE, COL_GRID);
+    draw_rect(dr, ox + GRID_LINE_TL, oy + GRID_LINE_TL,
+              TILE_SIZE - GRID_LINE_ALL, TILE_SIZE - GRID_LINE_ALL, bg);
 
     /* More outlines for clue squares. */
     if (flags & DS_CURSOR) {
@@ -2336,8 +2401,8 @@ static void draw_square(drawing *dr, game_drawstate *ds,
                            (flags_drag & DS_NOTRACK) == DS_NOTRACK, &c);
     if (flags_best) {
         off = HALFSZ/2;
-        draw_line(dr, cx - off, cy - off, cx + off, cy + off, c);
-        draw_line(dr, cx - off, cy + off, cx + off, cy - off, c);
+        draw_thick_line(dr, LINE_THICK, cx - off, cy - off, cx + off, cy + off, c);
+        draw_thick_line(dr, LINE_THICK, cx - off, cy + off, cx + off, cy - off, c);
     }
 
     c = COL_TRACK;
@@ -2351,8 +2416,8 @@ static void draw_square(drawing *dr, game_drawstate *ds,
             cx += (d == R) ? t2 : (d == L) ? -t2 : 0;
             cy += (d == D) ? t2 : (d == U) ? -t2 : 0;
 
-            draw_line(dr, cx - off, cy - off, cx + off, cy + off, c);
-            draw_line(dr, cx - off, cy + off, cx + off, cy - off, c);
+            draw_thick_line(dr, LINE_THICK, cx - off, cy - off, cx + off, cy + off, c);
+            draw_thick_line(dr, LINE_THICK, cx - off, cy + off, cx + off, cy - off, c);
         }
     }
 
@@ -2360,7 +2425,7 @@ static void draw_square(drawing *dr, game_drawstate *ds,
     draw_update(dr, ox, oy, TILE_SIZE, TILE_SIZE);
 }
 
-static void draw_clue(drawing *dr, game_drawstate *ds, int w, int clue, int i, int col)
+static void draw_clue(drawing *dr, game_drawstate *ds, int w, int clue, int i, int col, int bg)
 {
     int cx, cy, tsz = TILE_SIZE/2;
     char buf[20];
@@ -2373,12 +2438,14 @@ static void draw_clue(drawing *dr, game_drawstate *ds, int w, int clue, int i, i
         cy = CENTERED_COORD(i-w);
     }
 
-    draw_rect(dr, cx - tsz + BORDER, cy - tsz + BORDER,
-              TILE_SIZE - BORDER, TILE_SIZE - BORDER, COL_BACKGROUND);
+    if (bg >= 0)
+        draw_rect(dr, cx - tsz + GRID_LINE_TL, cy - tsz + GRID_LINE_TL,
+                  TILE_SIZE - GRID_LINE_ALL, TILE_SIZE - GRID_LINE_ALL, bg);
     sprintf(buf, "%d", clue);
     draw_text(dr, cx, cy, FONT_VARIABLE, tsz, ALIGN_VCENTRE|ALIGN_HCENTRE,
               col, buf);
-    draw_update(dr, cx - tsz, cy - tsz, TILE_SIZE, TILE_SIZE);
+    draw_update(dr, cx - tsz + GRID_LINE_TL, cy - tsz + GRID_LINE_TL,
+                TILE_SIZE - GRID_LINE_ALL, TILE_SIZE - GRID_LINE_ALL);
 }
 
 static void draw_loop_ends(drawing *dr, game_drawstate *ds,
@@ -2430,7 +2497,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds, const game_state *oldst
                         const game_state *state, int dir, const game_ui *ui,
                         float animtime, float flashtime)
 {
-    int i, x, y, force = 0, flashing = 0, w = ds->w, h = ds->h;
+    int i, x, y, flashing = 0, w = ds->w, h = ds->h;
+    bool force = false;
     game_state *drag_state = NULL;
 
     if (!ds->started) {
@@ -2445,20 +2513,22 @@ static void game_redraw(drawing *dr, game_drawstate *ds, const game_state *oldst
 
         draw_loop_ends(dr, ds, state, COL_CLUE);
 
-        draw_line(dr, COORD(ds->w), COORD(0), COORD(ds->w), COORD(ds->h), COL_GRID);
-        draw_line(dr, COORD(0), COORD(ds->h), COORD(ds->w), COORD(ds->h), COL_GRID);
+        draw_rect(dr, COORD(0) - GRID_LINE_BR, COORD(0) - GRID_LINE_BR,
+                  ds->w * TILE_SIZE + GRID_LINE_ALL,
+                  ds->h * TILE_SIZE + GRID_LINE_ALL, COL_GRID);
 
         draw_update(dr, 0, 0, (w+2)*TILE_SIZE + 2*BORDER, (h+2)*TILE_SIZE + 2*BORDER);
 
-        ds->started = TRUE;
-        force = 1;
+        ds->started = true;
+        force = true;
     }
 
     for (i = 0; i < w+h; i++) {
         if (force || (state->num_errors[i] != ds->num_errors[i])) {
             ds->num_errors[i] = state->num_errors[i];
             draw_clue(dr, ds, w, state->numbers->numbers[i], i,
-                      ds->num_errors[i] ? COL_ERROR : COL_CLUE);
+                      ds->num_errors[i] ? COL_ERROR : COL_CLUE,
+		      ds->num_errors[i] ? COL_ERROR_BACKGROUND : COL_BACKGROUND);
         }
     }
 
@@ -2509,9 +2579,9 @@ static int game_status(const game_state *state)
     return state->completed ? +1 : 0;
 }
 
-static int game_timing_state(const game_state *state, game_ui *ui)
+static bool game_timing_state(const game_state *state, game_ui *ui)
 {
-    return TRUE;
+    return true;
 }
 
 static void game_print_size(const game_params *params, float *x, float *y)
@@ -2548,7 +2618,7 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 
     /* clue numbers, and loop ends */
     for (i = 0; i < w+h; i++)
-        draw_clue(dr, ds, w, state->numbers->numbers[i], i, black);
+        draw_clue(dr, ds, w, state->numbers->numbers[i], i, black, -1);
     draw_loop_ends(dr, ds, state, black);
 
     /* clue tracks / solution */
@@ -2569,24 +2639,25 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 const struct game thegame = {
     "Train Tracks", "games.tracks", "tracks",
     default_params,
-    game_fetch_preset,
+    game_fetch_preset, NULL,
     decode_params,
     encode_params,
     free_params,
     dup_params,
-    TRUE, game_configure, custom_params,
+    true, game_configure, custom_params,
     validate_params,
     new_game_desc,
     validate_desc,
     new_game,
     dup_game,
     free_game,
-    TRUE, solve_game,
-    TRUE, game_can_format_as_text_now, game_text_format,
+    true, solve_game,
+    true, game_can_format_as_text_now, game_text_format,
     new_ui,
     free_ui,
     encode_ui,
     decode_ui,
+    NULL, /* game_request_keys */
     game_changed_state,
     interpret_move,
     execute_move,
@@ -2598,9 +2669,9 @@ const struct game thegame = {
     game_anim_length,
     game_flash_length,
     game_status,
-    TRUE, FALSE, game_print_size, game_print,
-    FALSE,			       /* wants_statusbar */
-    FALSE, game_timing_state,
+    true, false, game_print_size, game_print,
+    false,			       /* wants_statusbar */
+    false, game_timing_state,
     0,				       /* flags */
 };
 
